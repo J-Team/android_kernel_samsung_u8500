@@ -41,6 +41,11 @@
 #include <linux/list.h>
 #endif
 
+#ifdef CONFIG_USB_SWITCHER
+#include <linux/usb_switcher.h>
+#include <linux/input/ab8505_micro_usb_iddet.h>
+#endif
+
 #define MAX_WIDTH		30
 #define MAX_PRESSURE		255
 
@@ -157,6 +162,44 @@ enum {
 	TOUCH_KEY
 };
 
+#ifdef CONFIG_USB_SWITCHER
+enum {
+	NORMAL_MODE = 0,
+	TA_MODE,
+};
+
+enum ab8505_usb_link_status {
+	USB_LINK_NOT_CONFIGURED_8505 = 0,
+	USB_LINK_STD_HOST_NC_8505,
+	USB_LINK_STD_HOST_C_NS_8505,
+	USB_LINK_STD_HOST_C_S_8505,
+	USB_LINK_CDP_8505,
+	USB_LINK_RESERVED0_8505,
+	USB_LINK_RESERVED1_8505,
+	USB_LINK_DEDICATED_CHG_8505,
+	USB_LINK_ACA_RID_A_8505,
+	USB_LINK_ACA_RID_B_8505,
+	USB_LINK_ACA_RID_C_NM_8505,
+	USB_LINK_RESERVED2_8505,
+	USB_LINK_RESERVED3_8505,
+	USB_LINK_HM_IDGND_8505,
+	USB_LINK_CHARGERPORT_NOT_OK_8505,
+	USB_LINK_CHARGER_DM_HIGH_8505,
+	USB_LINK_PHYEN_NO_VBUS_NO_IDGND_8505,
+	USB_LINK_STD_UPSTREAM_NO_IDGNG_NO_VBUS_8505,
+	USB_LINK_STD_UPSTREAM_8505,
+	USB_LINK_CHARGER_SE1_8505,
+	USB_LINK_CARKIT_CHGR_1_8505,
+	USB_LINK_CARKIT_CHGR_2_8505,
+	USB_LINK_ACA_DOCK_CHGR_8505,
+	USB_LINK_SAMSUNG_BOOT_CBL_PHY_EN_8505,
+	USB_LINK_SAMSUNG_BOOT_CBL_PHY_DISB_8505,
+	USB_LINK_SAMSUNG_UART_CBL_PHY_EN_8505,
+	USB_LINK_SAMSUNG_UART_CBL_PHY_DISB_8505,
+	USB_LINK_MOTOROLA_FACTORY_CBL_PHY_EN_8505,
+};
+#endif
+
 #define MMS_FW_HEADER_VER	0x01
 
 struct mms_fw_image {
@@ -194,6 +237,12 @@ struct mms_ts_info {
 #ifdef TSK_FACTORY
 	struct device			*dev_tk;
 	bool				*key_pressed;
+#endif
+
+#ifdef CONFIG_USB_SWITCHER
+	struct notifier_block		nb;
+	u8				dev_mode;
+	bool				ts_noise;
 #endif
 
 #ifdef TSP_FACTORY
@@ -286,6 +335,11 @@ static void mms_ts_early_suspend(struct early_suspend *h);
 static void mms_ts_late_resume(struct early_suspend *h);
 #endif
 
+#ifdef CONFIG_USB_SWITCHER
+extern int micro_usb_register_usb_notifier(struct notifier_block *nb);
+extern int use_ab8505_iddet;
+#endif
+
 static void hw_reboot(struct mms_ts_info *info, bool bootloader)
 {
 	if (info->pdata->vdd_on)
@@ -373,6 +427,26 @@ static irqreturn_t mms_ts_interrupt(int irq, void *dev_id)
 		hw_reboot_normal(info);
 		goto out;
 	}
+
+#ifdef CONFIG_USB_SWITCHER
+	if (buf[0] == 0x0E) {
+		dev_info(&client->dev, "enter the noise mode\n");
+		buf[0] = 0x0;
+		info->ts_noise = 1;
+		i2c_smbus_write_byte_data(info->client, 0x10, 0x00);
+
+		if (info->dev_mode) {
+			dev_info(&info->client->dev, "TA MODE\n");
+			i2c_smbus_write_byte_data(info->client, 0x30, 0x1);
+		} else {
+			dev_info(&info->client->dev, "NORMAL MODE\n");
+			i2c_smbus_write_byte_data(info->client, 0x30, 0x2);
+			info->ts_noise = 0;
+		}
+
+		goto out;
+	}
+#endif
 
 #if defined(VERBOSE_DEBUG)
 	print_hex_dump(KERN_DEBUG, "mms_ts raw: ",
@@ -482,6 +556,62 @@ static inline void mms_pwr_on_reset(struct mms_ts_info *info)
 	 * Find the right value */
 	msleep(250);
 }
+
+#ifdef CONFIG_USB_SWITCHER
+int mms_usb_switch_notify(struct notifer_block *nb, unsigned long val,
+			  void *dev)
+{
+	struct mms_ts_info *info = container_of(nb, struct mms_ts_info, nb);
+	struct i2c_client *client = info->client;
+
+	if (use_ab8505_iddet) {
+		if ((val & 0x1F) == USB_LINK_NOT_CONFIGURED_8505) {
+			dev_info(&client->dev, "%s: Normal mode(0x%x)\n",
+				 __func__, val);
+			info->dev_mode = NORMAL_MODE;
+
+		} else {
+			switch (val & 0x1F) {
+			case USB_LINK_STD_HOST_NC_8505:
+			case USB_LINK_STD_HOST_C_NS_8505:
+			case USB_LINK_STD_HOST_C_S_8505:
+			case USB_LINK_CDP_8505:
+			case USB_LINK_DEDICATED_CHG_8505:
+			case USB_LINK_CARKIT_CHGR_1_8505:
+			case USB_LINK_CARKIT_CHGR_2_8505:
+				dev_info(&client->dev, "%s: TA mode(0x%x)\n",
+					 __func__, val);
+				info->dev_mode = TA_MODE;
+				break;
+			default:
+				dev_err(&client->dev, "%s: no mode (0x%x)\n",
+					__func__, val);
+			}
+		}
+	} else {
+		if ((val & (EXTERNAL_USB | EXTERNAL_DEDICATED_CHARGER |
+		    EXTERNAL_USB_CHARGER | EXTERNAL_CAR_KIT |
+		    EXTERNAL_PHONE_POWERED_DEVICE)) && (val &
+		    (USB_SWITCH_CONNECTION_EVENT |
+		    USB_SWITCH_DRIVER_STARTED))) {
+			dev_info(&client->dev, "%s: TA mode(0x%x)\n",
+					 __func__, val);
+			info->dev_mode = TA_MODE;
+
+		} else if (val & USB_SWITCH_DISCONNECTION_EVENT) {
+			dev_info(&client->dev, "%s: Normal mode(0x%x)\n",
+				 __func__, val);
+			info->dev_mode = NORMAL_MODE;
+
+		} else {
+			dev_err(&client->dev, "%s: no mode (0x%x)\n",
+					__func__, val);
+		}
+	}
+
+	return 0;
+}
+#endif
 
 static void isp_toggle_clk(struct mms_ts_info *info, int start_lvl, int end_lvl,
 			   int hold_us)
@@ -3059,6 +3189,15 @@ static int __devinit mms_ts_probe(struct i2c_client *client,
 	info->irq = client->irq;
 	info->enabled = true;
 
+#ifdef CONFIG_USB_SWITCHER
+	info->nb.notifier_call = mms_usb_switch_notify;
+
+	if (use_ab8505_iddet)
+		micro_usb_register_usb_notifier(&info->nb);
+	else
+		usb_switch_register_notify(&info->nb);
+#endif
+
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	info->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN + 1;
 	info->early_suspend.suspend = mms_ts_early_suspend;
@@ -3239,6 +3378,19 @@ static int mms_ts_resume(struct device *dev)
 	mutex_lock(&info->input_dev_ts->mutex);
 	if (info->input_dev_ts->users)
 		ret = mms_ts_enable(info);
+
+#ifdef CONFIG_USB_SWITCHER
+	if (info->ts_noise) {
+		if (info->dev_mode) {
+			dev_info(&info->client->dev, "TA MODE\n");
+			i2c_smbus_write_byte_data(info->client, 0x30, 0x1);
+		} else {
+			dev_info(&info->client->dev, "NORMAL MODE\n");
+			i2c_smbus_write_byte_data(info->client, 0x30, 0x2);
+			info->ts_noise = 0;
+		}
+	}
+#endif
 	mutex_unlock(&info->input_dev_ts->mutex);
 
 	return ret;

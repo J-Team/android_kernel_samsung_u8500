@@ -771,15 +771,15 @@ static int ab8500_comp_fg_bat_voltage(struct ab8500_fuelgauge_info *di,
 		vbat += ab8500_fg_bat_voltage(di);
 		i++;
 		dev_dbg(di->dev, "LoadComp Vbat avg [%d] %d\n", i, vbat/i);
-		msleep(5);
+		usleep_range(5000, 5001);
 	} while (!ab8500_fg_inst_curr_done(di) &&
 		i <= WAIT_FOR_INST_CURRENT_MAX);
 
-	vbat = vbat /i;
+	vbat = vbat / i;
 
 	dev_dbg(di->dev, "LoadComp Vbat avg [%d] %d\n", i, vbat);
 
-	if ( ab8500_fg_inst_curr_finalize(di, &di->inst_curr) ){
+	if (ab8500_fg_inst_curr_finalize(di, &di->inst_curr)) {
 		pr_info("[FG] Returned uncompensated vbat\n");
 		if (!always)
 			return -1;
@@ -792,13 +792,16 @@ static int ab8500_comp_fg_bat_voltage(struct ab8500_fuelgauge_info *di,
 
 	if (!di->flags.charging)
 		ab8500_fg_add_i_sample(di, di->inst_curr);
-	
+
 #if defined(CONFIG_MACH_JANICE) || \
 	defined(CONFIG_MACH_CODINA) || \
 	defined(CONFIG_MACH_GAVINI) || \
 	defined(CONFIG_MACH_SEC_GOLDEN) || \
 	defined(CONFIG_MACH_SEC_KYLE) || \
-	defined(CONFIG_MACH_SEC_RICCO)
+	defined(CONFIG_MACH_SEC_RICCO) ||\
+	defined(CONFIG_MACH_SEC_SKOMER) ||\
+	defined(CONFIG_MACH_SEC_HENDRIX)
+
 	bat_res_comp = ab8500_fg_volt_to_resistance(di, vbat);
 #else
 	bat_res_comp = get_battery_data(di).bat_info->
@@ -836,6 +839,7 @@ static int ab8500_fg_volt_to_capacity(struct ab8500_fuelgauge_info *di,
 	int i, tbl_size;
 	struct v_to_cap *tbl;
 	int cap = 0;
+	union power_supply_propval val;
 
 	tbl = get_battery_data(di).bat_info->v_to_cap_tbl,
 	tbl_size = get_battery_data(di).bat_info->n_v_cap_tbl_elements;
@@ -865,6 +869,20 @@ static int ab8500_fg_volt_to_capacity(struct ab8500_fuelgauge_info *di,
 
 	dev_dbg(di->dev, "%s Vbat: %d, Cap: %d per mille",
 		__func__, voltage, cap);
+
+	if (di->flags.fully_charged) {
+		if (cap <= 900) {
+			if (di->fullcap_error_cnt >= 36) {
+				psy_do_property("sec-charger", get,
+						POWER_SUPPLY_PROP_TECHNOLOGY,
+						val);
+				panic("different between capacity & voltage");
+			}
+			di->fullcap_error_cnt++;
+		} else
+			di->fullcap_error_cnt = 0;
+	} else
+		di->fullcap_error_cnt = 0;
 
 	return cap;
 }
@@ -1112,7 +1130,9 @@ static int ab8500_fg_calc_cap_discharge_fg(struct ab8500_fuelgauge_info *di)
 #if defined(CONFIG_MACH_CODINA) || \
 	defined(CONFIG_MACH_SEC_GOLDEN) || \
 	defined(CONFIG_MACH_SEC_KYLE) || \
-	defined(CONFIG_MACH_SEC_RICCO)
+	defined(CONFIG_MACH_SEC_RICCO) || \
+	defined(CONFIG_MACH_SEC_SKOMER) || \
+	defined(CONFIG_MACH_SEC_HENDRIX)
 	} else if (di->bat_cap.permille <= 120) {
 		di->n_skip_add_sample = 1;
 	}
@@ -1281,6 +1301,7 @@ static void ab8500_fg_check_capacity_limits(struct ab8500_fuelgauge_info *di,
 		di->bat_cap.prev_mah = 0;
 		di->bat_cap.mah = 0;
 		changed = true;
+		di->lowbat_poweroff = false;
 	} else if (di->bat_cap.prev_percent !=
 			percent) {
 		if (percent == 0) {
@@ -1657,7 +1678,9 @@ static void ab8500_fg_algorithm_discharging(struct ab8500_fuelgauge_info *di)
 #if defined(CONFIG_MACH_CODINA) || \
 	defined(CONFIG_MACH_SEC_GOLDEN) || \
 	defined(CONFIG_MACH_SEC_KYLE) || \
-	defined(CONFIG_MACH_SEC_RICCO)
+	defined(CONFIG_MACH_SEC_RICCO) || \
+	defined(CONFIG_MACH_SEC_SKOMER) || \
+	defined(CONFIG_MACH_SEC_HENDRIX)
 		if (DIV_ROUND_CLOSEST(di->bat_cap.permille, 10) <= 10) {
 			queue_delayed_work(di->fg_wq,
 				&di->fg_periodic_work,
@@ -1933,8 +1956,8 @@ static int ab8500_fg_battok_init_hw_register(struct ab8500_fuelgauge_info *di)
 	int ret;
 	int new_val;
 
-	sel0 = get_battery_data(di).fg_params->battok_falling_th_sel0;
-	sel1 = get_battery_data(di).fg_params->battok_raising_th_sel1;
+	sel0 = get_battery_data(di).fg_params->battok_raising_th_sel0;
+	sel1 = get_battery_data(di).fg_params->battok_falling_th_sel1;
 
 	cbp_sel0 = ab8500_fg_battok_calc(di, sel0);
 	cbp_sel1 = ab8500_fg_battok_calc(di, sel1);
@@ -1951,7 +1974,6 @@ static int ab8500_fg_battok_init_hw_register(struct ab8500_fuelgauge_info *di)
 		dev_warn(di->dev, "Invalid voltage step:%d, using %d %d\n",
 			sel1, selected, cbp_sel1);
 
-	cbp_sel1 = 0x7;  /* BATTOK falling threshold to 2.71V */
 	new_val = cbp_sel0 | (cbp_sel1 << 4);
 
 	dev_dbg(di->dev, "using: %x %d %d\n", new_val, cbp_sel0, cbp_sel1);
@@ -2039,13 +2061,16 @@ static irqreturn_t ab8500_fg_cc_convend_handler(int irq, void *_di)
 static irqreturn_t ab8500_fg_lowbatf_handler(int irq, void *_di)
 {
 	struct ab8500_fuelgauge_info *di = _di;
+	struct timespec ts;
 
 	/* Initiate handling in ab8500_fg_low_bat_work()
 	   if not already initiated. */
 	if (!di->flags.low_bat_delay) {
 
 		wake_lock_timeout(&di->lowbat_wake_lock, 20 * HZ);
-		dev_warn(di->dev, "Battery voltage is below LOW threshold\n");
+		getnstimeofday(&ts);
+		dev_warn(di->dev, "Battery voltage is below LOW threshold[%ld]\n",
+			 ts.tv_sec);
 		di->flags.low_bat_delay = true;
 		/*
 		 * Start a timer to check LOW_BAT again after some time
@@ -2651,7 +2676,7 @@ static ssize_t ab8505_powercut_maxtime_write(struct device *dev,
 	struct ab8500_fuelgauge_info *di =
 		container_of(psy, struct ab8500_fuelgauge_info, psy);
 
-	reg_value = simple_strtoul(buf, NULL, 10);
+	ret = kstrtouint(buf, 10, &reg_value);
 	if (reg_value > 0x7F) {
 		dev_err(dev,
 			"Incorrect parameter, echo 0 (0.0s) - 127 (1.98s) "
@@ -2704,7 +2729,7 @@ static ssize_t ab8505_powercut_restart_write(struct device *dev,
 	struct ab8500_fuelgauge_info *di =
 		container_of(psy, struct ab8500_fuelgauge_info, psy);
 
-	reg_value = simple_strtoul(buf, NULL, 10);
+	ret = kstrtouint(buf, 10, &reg_value);
 	if (reg_value > 0xF) {
 		dev_err(dev,
 		"Incorrect parameter, echo 0 - 15 for number of restart\n");
@@ -2802,7 +2827,7 @@ static ssize_t ab8505_powercut_write(struct device *dev,
 	struct ab8500_fuelgauge_info *di =
 		container_of(psy, struct ab8500_fuelgauge_info, psy);
 
-	reg_value = simple_strtoul(buf, NULL, 10);
+	ret = kstrtouint(buf, 10, &reg_value);
 	if (reg_value > 0x1) {
 		dev_err(dev,
 			"Incorrect parameter, echo 0/1 to "
@@ -2856,7 +2881,7 @@ static ssize_t ab8505_powercut_debounce_write(struct device *dev,
 	struct ab8500_fuelgauge_info *di =
 		container_of(psy, struct ab8500_fuelgauge_info, psy);
 
-	reg_value = simple_strtoul(buf, NULL, 10);
+	ret = kstrtouint(buf, 10, &reg_value);
 	if (reg_value > 0x7) {
 		dev_err(dev,
 		"Incorrect parameter, echo 0 to 7 for debounce setting\n");

@@ -223,7 +223,6 @@ static __init int setup_boot_mode(char *opt)
 
 __setup("bootmode=", setup_boot_mode);
 
-#if defined(CONFIG_MACH_JANICE_CHN) || defined (CONFIG_MACH_GAVINI) || defined(CONFIG_MACH_JANICE)
 u32 sec_lpm_bootmode;
 EXPORT_SYMBOL(sec_lpm_bootmode);
 
@@ -234,7 +233,6 @@ static __init int setup_lpm_boot_mode(char *opt)
 }
 
 __setup("lpm_boot=", setup_lpm_boot_mode);
-#endif
 
 u32 sec_dbug_level;
 EXPORT_SYMBOL(sec_dbug_level);
