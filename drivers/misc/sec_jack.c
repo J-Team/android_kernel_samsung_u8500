@@ -31,15 +31,16 @@
 #include <linux/regulator/consumer.h>
 #include <linux/sec_jack.h>
 #include <linux/mfd/ab8500.h>
-#ifdef CONFIG_MACH_SEC_GOLDEN
+#ifdef CONFIG_MACH_SEC_ACC_CONTROL //KSND
 #include <linux/mfd/abx500.h>
 #endif
 
 #define MAX_ZONE_LIMIT		10
-#define DET_CHECK_TIME_MS	250		/* 250ms */
 #ifdef CONFIG_MACH_CODINA
-#define BUTTONS_CHECK_TIME_MS   85              /* 85ms */
+#define DET_CHECK_TIME_MS	170		/* 170ms */
+#define BUTTONS_CHECK_TIME_MS   48              /* 45ms */
 #else
+#define DET_CHECK_TIME_MS	250		/* 250ms */
 #define BUTTONS_CHECK_TIME_MS   60              /* 60ms */
 #endif
 #define WAKE_LOCK_TIME		(HZ * 5)	/* 5 sec */
@@ -55,7 +56,9 @@ struct sec_jack_info {
 	struct input_dev *input;
 	struct timespec tp;  /* Get Current time for KSND */
 	struct timespec tp_after; /* Get Current time After Event */
+#ifdef CONFIG_MACH_SEC_ACC_CONTROL //KSND added
 	struct device *pmdev; /* Device */
+#endif
 	int det_r_irq;
 	int det_f_irq;
 	int buttons_r_irq;
@@ -112,8 +115,7 @@ static void set_micbias(struct sec_jack_info *hi, bool on)
 
 }
 
-//KSND added
-#ifdef CONFIG_MACH_SEC_GOLDEN
+#ifdef CONFIG_MACH_SEC_ACC_CONTROL //KSND added
 static void set_Accdetection( struct device *dev, bool on )
 {
   int ret = 0;
@@ -144,8 +146,7 @@ static void sec_jack_set_type(struct sec_jack_info *hi, int jack_type)
 	if (jack_type != SEC_HEADSET_4POLE)
 		set_micbias(hi, false);
 
-//KSND Added
-#if 0 //def CONFIG_MACH_SEC_GOLDEN
+#ifdef CONFIG_MACH_SEC_ACC_CONTROL //KSND added
 	if( jack_type != SEC_JACK_NO_DEVICE )
 		set_Accdetection(hi->pmdev, true );
 	else
@@ -427,8 +428,10 @@ static ssize_t select_jack_store(struct device *dev,
 	sscanf(buf, "%d", &value);
 	pr_err("%s: User  selection : 0X%x", __func__, value);
 	if (value == SEC_HEADSET_4POLE) {
-		pdata->set_micbias_state(true);
-		msleep(100);
+		if (pdata->set_micbias_state) {
+			pdata->set_micbias_state(true);
+			msleep(100);
+		}
 	}
 
 	sec_jack_set_type(hi, value);
@@ -671,8 +674,7 @@ static int sec_jack_probe(struct platform_device *pdev)
 
 	dev_set_drvdata(&pdev->dev, hi);
 
-//KSND Added
-#ifdef CONFIG_MACH_SEC_GOLDEN
+#ifdef CONFIG_MACH_SEC_ACC_CONTROL //KSND Added
 	hi->pmdev = &pdev->dev;
 #endif
 
