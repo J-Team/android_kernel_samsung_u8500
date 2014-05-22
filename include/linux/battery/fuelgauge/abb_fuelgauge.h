@@ -331,6 +331,7 @@ struct ab8500_fuelgauge_info {
 	int fg_res_chg;
 	int fg_res;
 	int lowbat_zero_voltage;
+	int fullcap_error_cnt;
 
 	bool initial_capacity_calib;
 	bool skip_init_measure;

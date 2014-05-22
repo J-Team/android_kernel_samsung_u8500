@@ -1,9 +1,9 @@
 /*
  *  Universal power supply monitor class
  *
- *  Copyright © 2007  Anton Vorontsov <cbou@mail.ru>
- *  Copyright © 2004  Szabolcs Gyurko
- *  Copyright © 2003  Ian Molton <spyro@f2s.com>
+ *  Copyright Ã\u201aÂ© 2007  Anton Vorontsov <cbou@mail.ru>
+ *  Copyright Ã\u201aÂ© 2004  Szabolcs Gyurko
+ *  Copyright Ã\u201aÂ© 2003  Ian Molton <spyro@f2s.com>
  *
  *  Modified: 2004, Oct     Szabolcs Gyurko
  *
@@ -20,7 +20,7 @@
 
 /*
  * All voltages, currents, charges, energies, time and temperatures in uV,
- * µA, µAh, µWh, seconds and tenths of degree Celsius unless otherwise
+ * Ã\u201aÂµA, Ã\u201aÂµAh, Ã\u201aÂµWh, seconds and tenths of degree Celsius unless otherwise
  * stated. It's driver's job to convert its raw values to units in which
  * this class operates.
  */
@@ -120,6 +120,9 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_ENERGY_AVG,
 	POWER_SUPPLY_PROP_CAPACITY, /* in percents! */
 	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
+	#if defined(CONFIG_MACH_JANICE) || defined(CONFIG_MACH_CODINA) || defined(CONFIG_MACH_GAVINI)
+	POWER_SUPPLY_PROP_CAPACITY_RAW, /* in 4 digit  ! */
+	#endif
 	POWER_SUPPLY_PROP_TEMP,
 	POWER_SUPPLY_PROP_TEMP_AMBIENT,
 	POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW,
